@@ -24,18 +24,14 @@ on:
         required: false
         type: string
         default: 'Dockerfile'
-      # Branch configuration
       dev_branch:
-        description: 'Name of the development branch'
         required: false
         type: string
         default: 'dev'
       production_branch:
-        description: 'Name of the production branch'
         required: false
         type: string
         default: 'production'
-      # Manual version override (for production releases via workflow_dispatch)
       manual_version:
         required: false
         type: string
@@ -63,410 +59,192 @@ on:
       EMAIL_TO:
         required: false
 
-# ──────────────────────────────────────────────────────────────────────────────
-# JOB GRAPH:
-#
-#   prepare
-#     ├── test ─────────────┐
-#     ├── sonar ────────────┼──► build ──► trivy ──► push ──► notify
-#     └── snyk  ────────────┘
-#
-# ──────────────────────────────────────────────────────────────────────────────
-
 env:
   DOCKER_REGISTRY: docker.io
 
 jobs:
-  # ── JOB 1: PREPARE ──────────────────────────────────────────────────────────
-  prepare:
-    name: "Prepare"
-    runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      packages: read
 
-    defaults:
-      run:
-        working-directory: ${{ inputs.working_directory }}
+# ─────────────────────────────────────────────
+# PREPARE
+# ─────────────────────────────────────────────
+  prepare:
+    runs-on: ubuntu-latest
 
     outputs:
-      tag: ${{ steps.image_tag.outputs.tag }}
-      push: ${{ steps.image_tag.outputs.push }}
-      additional_tags: ${{ steps.image_tag.outputs.additional_tags }}
-      is_production: ${{ steps.image_tag.outputs.is_production }}
+      tag: ${{ steps.tag.outputs.tag }}
+      push: ${{ steps.tag.outputs.push }}
+      is_production: ${{ steps.tag.outputs.is_production }}
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: Cache Maven dependencies
-        uses: actions/cache@v4
-        with:
-          path: ~/.m2/repository
-          key: ${{ runner.os }}-maven-${{ hashFiles(format('{0}/pom.xml', inputs.working_directory)) }}
-          restore-keys: |
-            ${{ runner.os }}-maven-
-
-      - name: Resolve Image Tag
-        id: image_tag
+      - name: Resolve Tag
+        id: tag
         run: |
-          DEV_BRANCH="${{ inputs.dev_branch }}"
-          PROD_BRANCH="${{ inputs.production_branch }}"
-          CURRENT_BRANCH="${{ github.ref_name }}"
-          MANUAL_VERSION="${{ inputs.manual_version }}"
-
-          # Check if manual version provided (workflow_dispatch with version input)
-          if [[ -n "$MANUAL_VERSION" ]]; then
-            echo "tag=$MANUAL_VERSION" >> $GITHUB_OUTPUT
-            echo "additional_tags=latest" >> $GITHUB_OUTPUT
+          if [[ "${{ github.ref_name }}" == "${{ inputs.production_branch }}" ]]; then
+            echo "tag=prod-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
             echo "push=true" >> $GITHUB_OUTPUT
             echo "is_production=true" >> $GITHUB_OUTPUT
-            echo "Using manual version: $MANUAL_VERSION"
-          elif [[ "$CURRENT_BRANCH" == "$PROD_BRANCH" ]]; then
-            # Production branch - use git tag if available, otherwise commit SHA
-            if [[ "${{ github.ref }}" == refs/tags/v* ]]; then
-              TAG=${GITHUB_REF#refs/tags/}
-              echo "tag=$TAG" >> $GITHUB_OUTPUT
-              echo "additional_tags=latest" >> $GITHUB_OUTPUT
-            else
-              SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-              echo "tag=prod-${SHORT_SHA}" >> $GITHUB_OUTPUT
-              echo "additional_tags=" >> $GITHUB_OUTPUT
-            fi
-            echo "push=true" >> $GITHUB_OUTPUT
-            echo "is_production=true" >> $GITHUB_OUTPUT
-          elif [[ "$CURRENT_BRANCH" == "$DEV_BRANCH" ]]; then
-            # Dev branch - use short commit SHA
-            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-            echo "tag=dev-${SHORT_SHA}" >> $GITHUB_OUTPUT
-            echo "additional_tags=" >> $GITHUB_OUTPUT
-            echo "push=${{ github.event_name == 'push' }}" >> $GITHUB_OUTPUT
-            echo "is_production=false" >> $GITHUB_OUTPUT
           else
-            # Other branches - use short commit SHA, no push
-            SHORT_SHA=$(echo "${{ github.sha }}" | cut -c1-7)
-            echo "tag=sha-${SHORT_SHA}" >> $GITHUB_OUTPUT
-            echo "additional_tags=" >> $GITHUB_OUTPUT
+            echo "tag=dev-${GITHUB_SHA::7}" >> $GITHUB_OUTPUT
             echo "push=false" >> $GITHUB_OUTPUT
             echo "is_production=false" >> $GITHUB_OUTPUT
           fi
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: 'maven'
-
-      - name: Build with Maven
-        run: mvn clean compile -DskipTests
-
-  # ── JOB 2: TEST ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# TEST
+# ─────────────────────────────────────────────
   test:
-    name: "Test"
     runs-on: ubuntu-latest
     needs: prepare
 
-    defaults:
-      run:
-        working-directory: ${{ inputs.working_directory }}
-
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Java
-        uses: actions/setup-java@v4
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
         with:
           java-version: '21'
           distribution: 'temurin'
-          cache: 'maven'
 
-      - name: Run Tests with Maven
-        run: mvn test
+      - run: mvn test
 
-  # ── JOB 3: SONAR ────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# SONAR
+# ─────────────────────────────────────────────
   sonar:
-    name: "SonarQube"
     runs-on: ubuntu-latest
     needs: prepare
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0
+      - uses: actions/checkout@v4
 
-      - name: SonarQube Scan
-        uses: SonarSource/sonarqube-scan-action@v6
+      - uses: SonarSource/sonarqube-scan-action@v6
         with:
           projectBaseDir: ${{ inputs.working_directory }}
-          args: >
-            -Dsonar.projectKey=${{ inputs.sonar_project_key != '' && inputs.sonar_project_key || inputs.service_name }}
-            -Dsonar.projectName=${{ inputs.sonar_project_key != '' && inputs.sonar_project_key || inputs.service_name }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
 
-      - name: SonarQube Quality Gate
-        uses: SonarSource/sonarqube-quality-gate-action@v1
-        with:
-          scanMetadataReportFile: ${{ inputs.working_directory }}/.scannerwork/report-task.txt
-        timeout-minutes: 5
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-  # ── JOB 4: SNYK ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# SNYK
+# ─────────────────────────────────────────────
   snyk:
-    name: "Snyk Security"
     runs-on: ubuntu-latest
     needs: prepare
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: 'maven'
-
-      - name: Snyk Scan (Maven)
-        uses: snyk/actions/maven@0.4.0
+      - uses: snyk/actions/maven@0.4.0
         with:
           command: test
-          args: --file=${{ inputs.working_directory }}/pom.xml --severity-threshold=high --fail-on=all
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
 
-  # ── JOB 5: BUILD ────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# BUILD
+# ─────────────────────────────────────────────
   build:
-    name: "Docker Build"
     runs-on: ubuntu-latest
     needs: [prepare, test, sonar, snyk]
 
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Setup Java
-        uses: actions/setup-java@v4
-        with:
-          java-version: '21'
-          distribution: 'temurin'
-          cache: 'maven'
+      - name: Build Jar
+        run: mvn package -DskipTests
 
-      - name: Build Spring Boot Application
-        working-directory: ${{ inputs.working_directory }}
-        run: mvn clean package -DskipTests
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Cache Docker layers
-        uses: actions/cache@v4
-        with:
-          path: /tmp/.buildx-cache
-          key: ${{ runner.os }}-buildx-${{ inputs.service_name }}-${{ github.sha }}
-          restore-keys: |
-            ${{ runner.os }}-buildx-${{ inputs.service_name }}-
-
-      - name: Build Docker Image
-        working-directory: ${{ inputs.docker_context }}
+      - name: Docker Build
         run: |
-          docker buildx build \
-            -f "${{ inputs.dockerfile_path }}" \
-            -t ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.tag }} \
-            --cache-from type=local,src=/tmp/.buildx-cache \
-            --cache-to type=local,dest=/tmp/.buildx-cache-new,mode=max \
-            --load \
-            .
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.tag }} .
 
-      - name: Save image as tar artifact
-        run: |
-          docker save \
-            ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.tag }} \
-            -o /tmp/docker-image.tar
+      - name: Save Image
+        run: docker save -o image.tar ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.tag }}
 
-      - name: Upload image artifact
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: docker-image-${{ inputs.service_name }}
-          path: /tmp/docker-image.tar
-          retention-days: 1
+          name: image
+          path: image.tar
 
-      - name: Move cache
-        run: |
-          rm -rf /tmp/.buildx-cache
-          mv /tmp/.buildx-cache-new /tmp/.buildx-cache
-
-  # ── JOB 6: TRIVY ────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# TRIVY
+# ─────────────────────────────────────────────
   trivy:
-    name: "Trivy Image Scan"
     runs-on: ubuntu-latest
     needs: [prepare, build]
 
     steps:
-      - name: Download image artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: docker-image-${{ inputs.service_name }}
-          path: /tmp
+          name: image
 
-      - name: Load Docker image
-        run: docker load -i /tmp/docker-image.tar
+      - run: docker load -i image.tar
 
-      - name: Trivy Security Scan
-        uses: aquasecurity/trivy-action@master
+      - uses: aquasecurity/trivy-action@master
         with:
-          image-ref: '${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.tag }}'
-          format: 'sarif'
-          output: 'trivy-results.sarif'
-          exit-code: '1'
-          ignore-unfixed: true
-          severity: 'CRITICAL,HIGH'
+          image-ref: ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.tag }}
+          exit-code: 1
+          severity: CRITICAL,HIGH
 
-      - name: Upload Trivy scan results
-        uses: github/codeql-action/upload-sarif@v3
-        if: always()
-        with:
-          sarif_file: 'trivy-results.sarif'
-
-  # ── JOB 7: PUSH ─────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# PUSH
+# ─────────────────────────────────────────────
   push:
-    name: "Docker Push"
     runs-on: ubuntu-latest
     needs: [prepare, trivy]
     if: needs.prepare.outputs.push == 'true'
 
-    permissions:
-      contents: write
-
     steps:
-      - name: Download image artifact
-        uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v4
         with:
-          name: docker-image-${{ inputs.service_name }}
-          path: /tmp
+          name: image
 
-      - name: Load Docker image
-        run: docker load -i /tmp/docker-image.tar
+      - run: docker load -i image.tar
 
-      - name: Docker Login
-        uses: docker/login-action@v3
+      - uses: docker/login-action@v3
         with:
           username: ${{ secrets.DOCKER_USERNAME }}
           password: ${{ secrets.DOCKER_PASSWORD }}
 
-      - name: Push Docker Image
-        run: |
-          docker push ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.tag }}
+      - run: docker push ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.tag }}
 
-      - name: Push Additional Tags (latest for production)
-        if: needs.prepare.outputs.additional_tags != ''
-        run: |
-          docker tag ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.tag }} \
-                     ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.additional_tags }}
-          docker push ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.additional_tags }}
-
-      - name: Create Git Tag
-        if: needs.prepare.outputs.is_production == 'true' && github.event_name == 'workflow_dispatch'
-        uses: mathieudutour/github-tag-action@v6.2
-        with:
-          github_token: ${{ github.token }}
-          custom_tag: ${{ needs.prepare.outputs.tag }}
-          tag_prefix: ''
-
-  # ── JOB 8: RELEASE ─────────────────────────────────────────────────────────
-  create-release:
-    name: "Create GitHub Release"
-    needs: [prepare, test, sonar, snyk, build, trivy, push]
-    if: |
-      always() &&
-      needs.prepare.outputs.is_production == 'true' &&
-      needs.push.result == 'success'
-    runs-on: ubuntu-latest
-
-    permissions:
-      contents: write
-
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ needs.prepare.outputs.tag }}
-          name: Release ${{ needs.prepare.outputs.tag }}
-          body: |
-            ## Release ${{ needs.prepare.outputs.tag }}
-
-            **Service:** ${{ inputs.service_name }}
-            **Image:** ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.tag }}
-
-            ### Security Scans
-            - Snyk: Passed
-            - SonarQube: Passed
-            - Trivy: Passed
-          generate_release_notes: true
-
-  # ── JOB 9: NOTIFY ───────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────
+# NOTIFY (FIXED 🔥)
+# ─────────────────────────────────────────────
   notify:
-    name: "Notify"
     runs-on: ubuntu-latest
-    needs: [prepare, test, sonar, snyk, build, trivy, push, create-release]
-    if: always() && needs.prepare.outputs.is_production == 'true'
+    needs: [prepare, test, sonar, snyk, build, trivy, push]
+    if: ${{ always() }}
 
     steps:
-      - name: Send Email (Success)
-        if: |
-          ${{ !contains(needs.*.result, 'failure') && 
-              !contains(needs.*.result, 'cancelled') &&
-              secrets.SMTP_HOST != '' }}
+      - name: Check Email Enabled
+        id: email
+        run: |
+          if [ -n "${{ secrets.SMTP_HOST }}" ]; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Send Success Mail
+        if: ${{ steps.email.outputs.enabled == 'true' && success() }}
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "CI Success - ${{ inputs.service_name }} ${{ needs.prepare.outputs.tag }}"
-          body: |
-            ✅ Build Successful
-
-            Service:      ${{ inputs.service_name }}
-            Tag:          ${{ needs.prepare.outputs.tag }}
-            Image:        ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ needs.prepare.outputs.tag }}
-            Repository:   ${{ github.repository }}
-            Branch:       ${{ github.ref_name }}
-            Triggered By: ${{ github.actor }}
+          subject: "CI Success"
           to: ${{ secrets.EMAIL_TO }}
           from: GitHub Actions
 
-      - name: Send Email (Failure)
-        if: |
-          ${{ (contains(needs.*.result, 'failure') || 
-               contains(needs.*.result, 'cancelled')) &&
-               secrets.SMTP_HOST != '' }}
+      - name: Send Failure Mail
+        if: ${{ steps.email.outputs.enabled == 'true' && failure() }}
         uses: dawidd6/action-send-mail@v3
         with:
           server_address: ${{ secrets.SMTP_HOST }}
           server_port: ${{ secrets.SMTP_PORT }}
           username: ${{ secrets.SMTP_USERNAME }}
           password: ${{ secrets.SMTP_PASSWORD }}
-          subject: "CI Failed - ${{ inputs.service_name }} - Run #${{ github.run_number }}"
-          body: |
-            ❌ CI Pipeline Execution Failed
-
-            Service:       ${{ inputs.service_name }}
-            Tag Attempted: ${{ needs.prepare.outputs.tag }}
-            Repository:    ${{ github.repository }}
-            Branch:        ${{ github.ref_name }}
-            Triggered By:  ${{ github.actor }}
-            Logs:          ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          subject: "CI Failed"
           to: ${{ secrets.EMAIL_TO }}
           from: GitHub Actions
