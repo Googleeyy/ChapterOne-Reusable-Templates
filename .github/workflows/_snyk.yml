@@ -60,6 +60,11 @@ jobs:
         with:
           node-version: ${{ inputs.node_version }}
 
+      - name: Install dependencies
+        if: inputs.runtime == 'node'
+        working-directory: ${{ inputs.working_directory }}
+        run: npm install
+
       - name: Snyk Scan (Node.js)
         if: inputs.runtime == 'node'
         uses: snyk/actions/node@0.4.0
