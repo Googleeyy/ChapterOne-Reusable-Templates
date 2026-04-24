@@ -51,12 +51,23 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       push: ${{ steps.tag.outputs.push }}
       is_production: ${{ steps.tag.outputs.is_production }}
+      image_name: ${{ steps.config.outputs.image_name }}
+      node_version: ${{ steps.config.outputs.node_version }}
+      working_directory: ${{ steps.config.outputs.working_directory }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # ── Export Config ───────────────────────────
+      - name: Export Config
+        id: config
+        run: |
+          echo "image_name=${{ github.event.inputs.image_name || vars.IMAGE_NAME || 'my-org/node-service' }}" >> $GITHUB_OUTPUT
+          echo "node_version=${{ github.event.inputs.node_version || vars.NODE_VERSION || '20' }}" >> $GITHUB_OUTPUT
+          echo "working_directory=${{ github.event.inputs.working_directory || vars.WORKING_DIRECTORY || '.' }}" >> $GITHUB_OUTPUT
 
       # ── Resolve Tag Strategy ───────────────────
       - name: Resolve Tag
@@ -139,16 +150,16 @@ git CHANGE:* ]]; then
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
-          node-version: ${{ env.NODE_VERSION }}
+          node-version: ${{ needs.prepare.outputs.node_version }}
           cache: 'npm'
-          cache-dependency-path: ${{ env.WORKING_DIRECTORY }}/package-lock.json
+          cache-dependency-path: ${{ needs.prepare.outputs.working_directory }}/package-lock.json
 
       - name: Install dependencies
-        working-directory: ${{ env.WORKING_DIRECTORY }}
+        working-directory: ${{ needs.prepare.outputs.working_directory }}
         run: npm ci
 
       - name: Run tests
-        working-directory: ${{ env.WORKING_DIRECTORY }}
+        working-directory: ${{ needs.prepare.outputs.working_directory }}
         run: npm test
 
   # ─────────────────────────────────────────────
@@ -156,13 +167,13 @@ git CHANGE:* ]]; then
   # ─────────────────────────────────────────────
   sonar:
     name: SonarQube Scan
-    needs: test
+    needs: [test, prepare]
     uses: YOUR_ORG/ci-workflows/.github/workflows/_sonar.yml@main
     with:
       runtime: node
-      working_directory: ${{ env.WORKING_DIRECTORY }}
+      working_directory: ${{ needs.prepare.outputs.working_directory }}
       sonar_project_key: ${{ vars.SONAR_PROJECT_KEY || '' }}
-      node_version: ${{ env.NODE_VERSION }}
+      node_version: ${{ needs.prepare.outputs.node_version }}
     secrets: inherit
 
   # ─────────────────────────────────────────────
@@ -170,12 +181,12 @@ git CHANGE:* ]]; then
   # ─────────────────────────────────────────────
   snyk:
     name: Snyk Security Scan
-    needs: test
+    needs: [test, prepare]
     uses: YOUR_ORG/ci-workflows/.github/workflows/_snyk.yml@main
     with:
       runtime: node
-      working_directory: ${{ env.WORKING_DIRECTORY }}
-      node_version: ${{ env.NODE_VERSION }}
+      working_directory: ${{ needs.prepare.outputs.working_directory }}
+      node_version: ${{ needs.prepare.outputs.node_version }}
       severity_threshold: ${{ vars.SNYK_SEVERITY || 'high' }}
     secrets: inherit
 
@@ -184,17 +195,17 @@ git CHANGE:* ]]; then
   # ─────────────────────────────────────────────
   build_trivy:
     name: Build & Trivy Scan
-    needs: [sonar, snyk]
+    needs: [sonar, snyk, prepare]
     uses: YOUR_ORG/ci-workflows/.github/workflows/_build_trivy.yml@main
     with:
       runtime: node
-      image_name: ${{ env.IMAGE_NAME }}
+      image_name: ${{ needs.prepare.outputs.image_name }}
       tag: ${{ needs.prepare.outputs.tag }}
       is_production: ${{ needs.prepare.outputs.is_production }}
-      working_directory: ${{ env.WORKING_DIRECTORY }}
+      working_directory: ${{ needs.prepare.outputs.working_directory }}
       docker_context: '.'
       dockerfile_path: 'Dockerfile'
-      node_version: ${{ env.NODE_VERSION }}
+      node_version: ${{ needs.prepare.outputs.node_version }}
       trivy_severity: ${{ vars.TRIVY_SEVERITY || 'CRITICAL,HIGH' }}
       trivy_ignore_unfixed: ${{ vars.TRIVY_IGNORE_UNFIXED || 'false' }}
     secrets: inherit
@@ -204,11 +215,11 @@ git CHANGE:* ]]; then
   # ─────────────────────────────────────────────
   push:
     name: Push to Registry
-    needs: build_trivy
+    needs: [build_trivy, prepare]
     if: needs.prepare.outputs.push == 'true'
     uses: YOUR_ORG/ci-workflows/.github/workflows/_push.yml@main
     with:
-      image_name: ${{ env.IMAGE_NAME }}
+      image_name: ${{ needs.prepare.outputs.image_name }}
       tag: ${{ needs.prepare.outputs.tag }}
       is_production: ${{ needs.prepare.outputs.is_production }}
       push_dev_images: ${{ vars.PUSH_DEV_IMAGES || 'false' }}
@@ -219,11 +230,11 @@ git CHANGE:* ]]; then
   # ─────────────────────────────────────────────
   notify:
     name: Email Notification
-    needs: [sonar, snyk, build_trivy, push]
+    needs: [sonar, snyk, build_trivy, push, prepare]
     if: always()
     uses: YOUR_ORG/ci-workflows/.github/workflows/_notify.yml@main
     with:
-      service_name: ${{ env.IMAGE_NAME }}
+      service_name: ${{ needs.prepare.outputs.image_name }}
       tag: ${{ needs.prepare.outputs.tag }}
       pipeline_status: ${{ contains(needs.*.result, 'failure') && 'failure' || 'success' }}
     secrets: inherit

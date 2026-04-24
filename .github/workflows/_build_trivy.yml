@@ -48,15 +48,9 @@ on:
         required: true
       DOCKER_PASSWORD:
         required: true
-      BREVO_API_KEY:
-        required: false
-      NOTIFY_EMAIL:
-        required: false
     outputs:
       image_full:
         value: ${{ jobs.build.outputs.image_full }}
-      trivy-critical:
-        value: ${{ jobs.build.outputs.trivy_critical }}
 
 jobs:
   build:
@@ -64,7 +58,6 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       image_full: ${{ steps.build.outputs.image_full }}
-      trivy_critical: ${{ steps.trivy-check.outputs.critical_found }}
 
     steps:
       - name: Checkout repository
@@ -140,29 +133,6 @@ jobs:
       - name: Load Docker Image
         run: docker load -i image.tar
 
-      # ── Trivy Scan (JSON for parsing) ────────────
-      - name: Trivy Scan (JSON for Analysis)
-        id: trivy-json
-        uses: aquasecurity/trivy-action@master
-        with:
-          image-ref: ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ inputs.tag }}
-          format: 'json'
-          output: 'trivy-results.json'
-          exit-code: '1'
-          ignore-unfixed: ${{ inputs.trivy_ignore_unfixed }}
-          severity: 'CRITICAL,HIGH'
-
-      - name: Check for Critical Vulnerabilities
-        id: trivy-check
-        run: |
-          if [ -f trivy-results.json ] && grep -q '"Severity": "CRITICAL"' trivy-results.json; then
-            echo "critical_found=true" >> $GITHUB_OUTPUT
-            echo "🚨 CRITICAL vulnerabilities found!"
-          else
-            echo "critical_found=false" >> $GITHUB_OUTPUT
-            echo "✅ No CRITICAL vulnerabilities found"
-          fi
-
       # ── Trivy Scan (Table) ────────────────────────
       - name: Trivy Scan (Table Format)
         uses: aquasecurity/trivy-action@master
@@ -182,7 +152,7 @@ jobs:
           output: 'trivy-results.sarif'
           ignore-unfixed: ${{ inputs.trivy_ignore_unfixed }}
           severity: ${{ inputs.trivy_severity }}
-      
+
       # ── Upload to GitHub Security ────────────────
       - name: Upload Trivy SARIF
         uses: github/codeql-action/upload-sarif@v3
@@ -202,22 +172,3 @@ jobs:
           echo "| **Runtime** | ${{ inputs.runtime }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Is Production** | ${{ inputs.is_production }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Trivy Severity** | ${{ inputs.trivy_severity }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| **Critical Found** | ${{ steps.trivy-check.outputs.critical_found }} |" >> $GITHUB_STEP_SUMMARY
-
-  # ─────────────────────────────────────────────
-  # NOTIFY-TRIVY — Alert on Critical Vulnerabilities
-  # ─────────────────────────────────────────────
-  notify-trivy:
-    name: Notify Critical Vulnerabilities
-    needs: build
-    if: always() && needs.build.outputs.trivy-critical == 'true'
-    uses: ./.github/workflows/_notify-brevo.yml@main
-    with:
-      subject: "🚨 Trivy: Critical Vulnerabilities in ${{ inputs.image_name }}"
-      body: "CRITICAL vulnerabilities found in ${{ inputs.image_name }} Docker image. Please review immediately."
-      service_name: ${{ inputs.image_name }}
-      artifact_name: ${{ inputs.image_name }}:${{ inputs.tag }}
-      environment: ${{ inputs.is_production == 'true' && 'production' || 'development' }}
-    secrets:
-      BREVO_API_KEY: ${{ secrets.BREVO_API_KEY }}
-      NOTIFY_EMAIL: ${{ secrets.NOTIFY_EMAIL }}

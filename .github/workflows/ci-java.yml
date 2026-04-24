@@ -51,12 +51,23 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       push: ${{ steps.tag.outputs.push }}
       is_production: ${{ steps.tag.outputs.is_production }}
+      image_name: ${{ steps.config.outputs.image_name }}
+      java_version: ${{ steps.config.outputs.java_version }}
+      working_directory: ${{ steps.config.outputs.working_directory }}
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
+
+      # ── Export Config ───────────────────────────
+      - name: Export Config
+        id: config
+        run: |
+          echo "image_name=${{ github.event.inputs.image_name || vars.IMAGE_NAME || 'my-org/java-service' }}" >> $GITHUB_OUTPUT
+          echo "java_version=${{ github.event.inputs.java_version || vars.JAVA_VERSION || '21' }}" >> $GITHUB_OUTPUT
+          echo "working_directory=${{ github.event.inputs.working_directory || vars.WORKING_DIRECTORY || '.' }}" >> $GITHUB_OUTPUT
 
       # ── Resolve Tag Strategy ───────────────────
       - name: Resolve Tag
@@ -139,12 +150,12 @@ git CHANGE:* ]]; then
       - name: Setup Java
         uses: actions/setup-java@v4
         with:
-          java-version: ${{ env.JAVA_VERSION }}
+          java-version: ${{ needs.prepare.outputs.java_version }}
           distribution: 'temurin'
           cache: 'maven'
 
       - name: Run Maven tests
-        working-directory: ${{ env.WORKING_DIRECTORY }}
+        working-directory: ${{ needs.prepare.outputs.working_directory }}
         run: mvn test --batch-mode
 
   # ─────────────────────────────────────────────
@@ -152,13 +163,13 @@ git CHANGE:* ]]; then
   # ─────────────────────────────────────────────
   sonar:
     name: SonarQube Scan
-    needs: test
+    needs: [test, prepare]
     uses: YOUR_ORG/ci-workflows/.github/workflows/_sonar.yml@main
     with:
       runtime: java
-      working_directory: ${{ env.WORKING_DIRECTORY }}
+      working_directory: ${{ needs.prepare.outputs.working_directory }}
       sonar_project_key: ${{ vars.SONAR_PROJECT_KEY || '' }}
-      java_version: ${{ env.JAVA_VERSION }}
+      java_version: ${{ needs.prepare.outputs.java_version }}
     secrets: inherit
 
   # ─────────────────────────────────────────────
@@ -166,12 +177,12 @@ git CHANGE:* ]]; then
   # ─────────────────────────────────────────────
   snyk:
     name: Snyk Security Scan
-    needs: test
+    needs: [test, prepare]
     uses: YOUR_ORG/ci-workflows/.github/workflows/_snyk.yml@main
     with:
       runtime: java
-      working_directory: ${{ env.WORKING_DIRECTORY }}
-      java_version: ${{ env.JAVA_VERSION }}
+      working_directory: ${{ needs.prepare.outputs.working_directory }}
+      java_version: ${{ needs.prepare.outputs.java_version }}
       severity_threshold: ${{ vars.SNYK_SEVERITY || 'high' }}
     secrets: inherit
 
@@ -180,17 +191,17 @@ git CHANGE:* ]]; then
   # ─────────────────────────────────────────────
   build_trivy:
     name: Build & Trivy Scan
-    needs: [sonar, snyk]
+    needs: [sonar, snyk, prepare]
     uses: YOUR_ORG/ci-workflows/.github/workflows/_build_trivy.yml@main
     with:
       runtime: java
-      image_name: ${{ env.IMAGE_NAME }}
+      image_name: ${{ needs.prepare.outputs.image_name }}
       tag: ${{ needs.prepare.outputs.tag }}
       is_production: ${{ needs.prepare.outputs.is_production }}
-      working_directory: ${{ env.WORKING_DIRECTORY }}
+      working_directory: ${{ needs.prepare.outputs.working_directory }}
       docker_context: '.'
       dockerfile_path: 'Dockerfile'
-      java_version: ${{ env.JAVA_VERSION }}
+      java_version: ${{ needs.prepare.outputs.java_version }}
       trivy_severity: ${{ vars.TRIVY_SEVERITY || 'CRITICAL,HIGH' }}
       trivy_ignore_unfixed: ${{ vars.TRIVY_IGNORE_UNFIXED || 'false' }}
     secrets: inherit
@@ -200,11 +211,11 @@ git CHANGE:* ]]; then
   # ─────────────────────────────────────────────
   push:
     name: Push to Registry
-    needs: build_trivy
+    needs: [build_trivy, prepare]
     if: needs.prepare.outputs.push == 'true'
     uses: YOUR_ORG/ci-workflows/.github/workflows/_push.yml@main
     with:
-      image_name: ${{ env.IMAGE_NAME }}
+      image_name: ${{ needs.prepare.outputs.image_name }}
       tag: ${{ needs.prepare.outputs.tag }}
       is_production: ${{ needs.prepare.outputs.is_production }}
       push_dev_images: ${{ vars.PUSH_DEV_IMAGES || 'false' }}
@@ -215,11 +226,11 @@ git CHANGE:* ]]; then
   # ─────────────────────────────────────────────
   notify:
     name: Email Notification
-    needs: [sonar, snyk, build_trivy, push]
+    needs: [sonar, snyk, build_trivy, push, prepare]
     if: always()
     uses: YOUR_ORG/ci-workflows/.github/workflows/_notify.yml@main
     with:
-      service_name: ${{ env.IMAGE_NAME }}
+      service_name: ${{ needs.prepare.outputs.image_name }}
       tag: ${{ needs.prepare.outputs.tag }}
       pipeline_status: ${{ contains(needs.*.result, 'failure') && 'failure' || 'success' }}
     secrets: inherit
