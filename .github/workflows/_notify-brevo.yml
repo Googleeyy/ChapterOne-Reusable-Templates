@@ -1,0 +1,46 @@
+name: Reusable Brevo Notification
+
+on:
+  workflow_call:
+    inputs:
+      subject:
+        required: true
+        type: string
+      body:
+        required: true
+        type: string
+      service_name:
+        required: true
+        type: string
+      artifact_name:
+        required: false
+        type: string
+        default: ''
+      environment:
+        required: false
+        type: string
+        default: 'development'
+    secrets:
+      BREVO_API_KEY:
+        required: true
+      NOTIFY_EMAIL:
+        required: true
+
+jobs:
+  notify:
+    name: Send Brevo Notification
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Send Email via Brevo
+        run: |
+          curl -X POST https://api.brevo.com/v3/smtp/email \
+            -H "accept: application/json" \
+            -H "api-key: ${{ secrets.BREVO_API_KEY }}" \
+            -H "content-type: application/json" \
+            -d '{
+              "sender": {"name": "GitHub Actions", "email": "github-actions@noreply.com"},
+              "to": [{"email": "${{ secrets.NOTIFY_EMAIL }}"}],
+              "subject": "${{ inputs.subject }}",
+              "htmlContent": "<h2>${{ inputs.subject }}</h2><p>${{ inputs.body }}</p><hr/><p><b>Service:</b> ${{ inputs.service_name }}</p><p><b>Environment:</b> ${{ inputs.environment }}</p><p><b>Artifact:</b> ${{ inputs.artifact_name }}</p><p><b>Run URL:</b> ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</p>"
+            }'
