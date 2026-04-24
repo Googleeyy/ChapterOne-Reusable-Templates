@@ -1,0 +1,176 @@
+name: Reusable Build & Trivy Scan
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+      is_production:
+        required: true
+        type: string
+      working_directory:
+        required: false
+        type: string
+        default: '.'
+      docker_context:
+        required: false
+        type: string
+        default: '.'
+      dockerfile_path:
+        required: false
+        type: string
+        default: 'Dockerfile'
+      runtime:
+        required: true
+        type: string
+      java_version:
+        required: false
+        type: string
+        default: '21'
+      node_version:
+        required: false
+        type: string
+        default: '20'
+      trivy_severity:
+        required: false
+        type: string
+        default: 'CRITICAL,HIGH'
+      trivy_ignore_unfixed:
+        required: false
+        type: string
+        default: 'false'
+    secrets:
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_PASSWORD:
+        required: true
+    outputs:
+      image_full:
+        value: ${{ jobs.build.outputs.image_full }}
+
+jobs:
+  build:
+    name: Build & Scan
+    runs-on: ubuntu-latest
+    outputs:
+      image_full: ${{ steps.build.outputs.image_full }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Runtime Setup: Java ──────────────────────
+      - name: Setup Java
+        if: inputs.runtime == 'java'
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java_version }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Build JAR
+        if: inputs.runtime == 'java'
+        working-directory: ${{ inputs.working_directory }}
+        run: mvn package -DskipTests --batch-mode
+
+      # ── Runtime Setup: Node ──────────────────────
+      - name: Setup Node.js
+        if: inputs.runtime == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+
+      - name: Install & Build
+        if: inputs.runtime == 'node'
+        working-directory: ${{ inputs.working_directory }}
+        run: |
+          npm ci
+          npm run build
+
+      # ── Docker Login ─────────────────────────────
+      - name: Docker Login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # ── Docker Build ─────────────────────────────
+      - name: Docker Build (Dev)
+        if: inputs.is_production == 'false'
+        run: |
+          docker build -t ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ inputs.tag }} -f ${{ inputs.dockerfile_path }} ${{ inputs.docker_context }}
+
+      - name: Docker Build (Production with Cache)
+        if: inputs.is_production == 'true'
+        run: |
+          # Try to pull previous latest for cache (ignore failure)
+          docker pull ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:latest || true
+          # Build with cache
+          docker build --cache-from ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:latest -t ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ inputs.tag }} -f ${{ inputs.dockerfile_path }} ${{ inputs.docker_context }}
+
+      - name: Set Image Full Output
+        id: build
+        run: |
+          echo "image_full=${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ inputs.tag }}" >> $GITHUB_OUTPUT
+
+      # ── Save & Upload Image ──────────────────────
+      - name: Save Docker Image
+        run: |
+          docker save -o image.tar ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ inputs.tag }}
+
+      - name: Upload Image Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: docker-image
+          path: image.tar
+          retention-days: 1
+
+      # ── Load for Trivy Scan ──────────────────────
+      - name: Load Docker Image
+        run: docker load -i image.tar
+
+      # ── Trivy Scan (Table) ────────────────────────
+      - name: Trivy Scan (Table Format)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ inputs.tag }}
+          format: 'table'
+          exit-code: '1'
+          ignore-unfixed: ${{ inputs.trivy_ignore_unfixed }}
+          severity: ${{ inputs.trivy_severity }}
+
+      # ── Trivy Scan (SARIF) ───────────────────────
+      - name: Trivy Scan (SARIF Format)
+        uses: aquasecurity/trivy-action@master
+        with:
+          image-ref: ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ inputs.tag }}
+          format: 'sarif'
+          output: 'trivy-results.sarif'
+          ignore-unfixed: ${{ inputs.trivy_ignore_unfixed }}
+          severity: ${{ inputs.trivy_severity }}
+
+      # ── Upload to GitHub Security ────────────────
+      - name: Upload Trivy SARIF
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: 'trivy-results.sarif'
+
+      # ── Job Summary ──────────────────────────────
+      - name: Generate Job Summary
+        if: always()
+        run: |
+          echo "## 🐳 Build & Trivy Scan Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ inputs.tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Runtime** | ${{ inputs.runtime }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Is Production** | ${{ inputs.is_production }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Trivy Severity** | ${{ inputs.trivy_severity }} |" >> $GITHUB_STEP_SUMMARY

@@ -1,0 +1,89 @@
+name: Reusable Push to Registry
+
+on:
+  workflow_call:
+    inputs:
+      image_name:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+      is_production:
+        required: true
+        type: string
+      push_dev_images:
+        required: false
+        type: string
+        default: 'false'
+    secrets:
+      DOCKER_USERNAME:
+        required: true
+      DOCKER_PASSWORD:
+        required: true
+      GH_TOKEN:
+        required: false
+
+jobs:
+  push:
+    name: Push Image
+    runs-on: ubuntu-latest
+    if: inputs.is_production == 'true' || inputs.push_dev_images == 'true'
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # ── Download Image Artifact ─────────────────
+      - name: Download Docker Image
+        uses: actions/download-artifact@v4
+        with:
+          name: docker-image
+
+      # ── Load Image ───────────────────────────────
+      - name: Load Docker Image
+        run: docker load -i image.tar
+
+      # ── Docker Login ─────────────────────────────
+      - name: Docker Login
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      # ── Push Versioned Tag ───────────────────────
+      - name: Push Versioned Tag
+        run: |
+          docker push ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ inputs.tag }}
+
+      # ── Tag & Push Latest (Production) ───────────
+      - name: Tag and Push Latest
+        if: inputs.is_production == 'true'
+        run: |
+          docker tag ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ inputs.tag }} ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:latest
+          docker push ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:latest
+
+      # ── Git Tag (Production) ─────────────────────
+      - name: Create Git Tag
+        if: inputs.is_production == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.GH_TOKEN || github.token }}
+        run: |
+          git config user.name "GitHub Actions"
+          git config user.email "actions@github.com"
+          git tag ${{ inputs.tag }}
+          git push origin ${{ inputs.tag }}
+
+      # ── Job Summary ──────────────────────────────
+      - name: Generate Job Summary
+        if: always()
+        run: |
+          echo "## 🚀 Push to Registry Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image** | ${{ secrets.DOCKER_USERNAME }}/${{ inputs.image_name }}:${{ inputs.tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Is Production** | ${{ inputs.is_production }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Git Tag Created** | ${{ inputs.is_production == 'true' && inputs.tag || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY

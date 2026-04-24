@@ -1,0 +1,89 @@
+name: Reusable Email Notification
+
+on:
+  workflow_call:
+    inputs:
+      service_name:
+        required: true
+        type: string
+      tag:
+        required: true
+        type: string
+      pipeline_status:
+        required: true
+        type: string
+    secrets:
+      SMTP_HOST:
+        required: false
+      SMTP_PORT:
+        required: false
+      SMTP_USERNAME:
+        required: false
+      SMTP_PASSWORD:
+        required: false
+      EMAIL_TO:
+        required: false
+
+jobs:
+  notify:
+    name: Send Notification
+    runs-on: ubuntu-latest
+
+    steps:
+      # ── Check Email Enabled ──────────────────────
+      - name: Check Email Configuration
+        id: email
+        run: |
+          if [[ -n "${{ secrets.SMTP_HOST }}" && -n "${{ secrets.EMAIL_TO }}" ]]; then
+            echo "enabled=true" >> $GITHUB_OUTPUT
+          else
+            echo "enabled=false" >> $GITHUB_OUTPUT
+            echo "Email notification skipped: SMTP_HOST or EMAIL_TO not configured"
+          fi
+
+      # ── Success Email ────────────────────────────
+      - name: Send Success Email
+        if: steps.email.outputs.enabled == 'true' && inputs.pipeline_status == 'success'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT || '587' }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "✅ CI Passed — ${{ inputs.service_name }} @ ${{ inputs.tag }}"
+          to: ${{ secrets.EMAIL_TO }}
+          from: GitHub Actions
+          html_body: |
+            <h2>CI Pipeline Success</h2>
+            <table>
+              <tr><td><b>Service:</b></td><td>${{ inputs.service_name }}</td></tr>
+              <tr><td><b>Tag:</b></td><td>${{ inputs.tag }}</td></tr>
+              <tr><td><b>Branch:</b></td><td>${{ github.ref_name }}</td></tr>
+              <tr><td><b>Commit SHA:</b></td><td>${{ github.sha }}</td></tr>
+              <tr><td><b>Run URL:</b></td><td>${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</td></tr>
+            </table>
+          convert_markdown: false
+
+      # ── Failure Email ──────────────────────────────
+      - name: Send Failure Email
+        if: steps.email.outputs.enabled == 'true' && inputs.pipeline_status != 'success'
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: ${{ secrets.SMTP_HOST }}
+          server_port: ${{ secrets.SMTP_PORT || '587' }}
+          username: ${{ secrets.SMTP_USERNAME }}
+          password: ${{ secrets.SMTP_PASSWORD }}
+          subject: "❌ CI Failed — ${{ inputs.service_name }} @ ${{ inputs.tag }}"
+          to: ${{ secrets.EMAIL_TO }}
+          from: GitHub Actions
+          html_body: |
+            <h2>CI Pipeline Failed</h2>
+            <p>Please review the failed steps in the workflow run.</p>
+            <table>
+              <tr><td><b>Service:</b></td><td>${{ inputs.service_name }}</td></tr>
+              <tr><td><b>Tag:</b></td><td>${{ inputs.tag }}</td></tr>
+              <tr><td><b>Branch:</b></td><td>${{ github.ref_name }}</td></tr>
+              <tr><td><b>Commit SHA:</b></td><td>${{ github.sha }}</td></tr>
+              <tr><td><b>Run URL:</b></td><td>${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}</td></tr>
+            </table>
+          convert_markdown: false

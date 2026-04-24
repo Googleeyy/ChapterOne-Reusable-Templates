@@ -1,0 +1,81 @@
+name: Reusable Snyk Security Scan
+
+on:
+  workflow_call:
+    inputs:
+      working_directory:
+        required: false
+        type: string
+        default: '.'
+      runtime:
+        required: true
+        type: string
+      severity_threshold:
+        required: false
+        type: string
+        default: 'high'
+      java_version:
+        required: false
+        type: string
+        default: '21'
+      node_version:
+        required: false
+        type: string
+        default: '20'
+    secrets:
+      SNYK_TOKEN:
+        required: true
+
+jobs:
+  snyk:
+    name: Snyk Vulnerability Scan
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── Java Runtime ─────────────────────────────
+      - name: Setup Java
+        if: inputs.runtime == 'java'
+        uses: actions/setup-java@v4
+        with:
+          java-version: ${{ inputs.java_version }}
+          distribution: 'temurin'
+          cache: 'maven'
+
+      - name: Snyk Scan (Maven)
+        if: inputs.runtime == 'java'
+        uses: snyk/actions/maven@0.4.0
+        with:
+          command: test
+          args: --severity-threshold=${{ inputs.severity_threshold }} --sarif-file-output=snyk.sarif
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      # ── Node Runtime ─────────────────────────────
+      - name: Setup Node.js
+        if: inputs.runtime == 'node'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node_version }}
+          cache: 'npm'
+          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
+
+      - name: Snyk Scan (Node.js)
+        if: inputs.runtime == 'node'
+        uses: snyk/actions/node@0.4.0
+        with:
+          command: test
+          args: --severity-threshold=${{ inputs.severity_threshold }} --sarif-file-output=snyk.sarif
+        env:
+          SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+
+      # ── Upload SARIF Artifact ────────────────────
+      - name: Upload Snyk SARIF
+        uses: actions/upload-artifact@v4
+        with:
+          name: snyk-sarif
+          path: snyk.sarif
+          if-no-files-found: ignore
+          retention-days: 5
