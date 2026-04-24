@@ -67,13 +67,11 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
-          cache: 'npm'
-          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
 
       - name: Install dependencies
         if: inputs.runtime == 'node'
         working-directory: ${{ inputs.working_directory }}
-        run: npm ci
+        run: npm install
 
       - name: SonarQube Scan (Node.js)
         if: inputs.runtime == 'node'

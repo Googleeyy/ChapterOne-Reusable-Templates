@@ -83,14 +83,12 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
-          cache: 'npm'
-          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
 
       - name: Install & Build
         if: inputs.runtime == 'node'
         working-directory: ${{ inputs.working_directory }}
         run: |
-          npm ci
+          npm install
           npm run build
 
       # ── Docker Login ─────────────────────────────

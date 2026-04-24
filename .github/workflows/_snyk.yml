@@ -59,8 +59,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: ${{ inputs.node_version }}
-          cache: 'npm'
-          cache-dependency-path: ${{ inputs.working_directory }}/package-lock.json
 
       - name: Snyk Scan (Node.js)
         if: inputs.runtime == 'node'
