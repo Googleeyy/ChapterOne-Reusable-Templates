@@ -85,7 +85,6 @@ jobs:
       # ── Sonar Quality Gate Check ─────────────────────
       - name: SonarQube Quality Gate Check
         if: inputs.runtime == 'java'
-        working-directory: ${{ inputs.working_directory }}
         uses: SonarSource/sonarqube-quality-gate-action@v1
         timeout-minutes: 5
         env:
