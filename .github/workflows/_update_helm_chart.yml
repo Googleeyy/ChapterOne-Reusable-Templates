@@ -51,11 +51,15 @@ jobs:
           FILE="helm-charts/${{ inputs.values-path }}/${{ inputs.service-name }}/values.yaml"
           if [ -f "$FILE" ]; then
             echo "Updating $FILE with tag ${{ inputs.image-tag }}"
+            
+            # Convert kebab-case to camelCase for YAML key (e.g., book-service → bookService)
+            SERVICE_KEY=$(echo "${{ inputs.service-name }}" | sed 's/-\([a-z]\)/\U\1/g')
+            
             # Update the tag value. Ensure it's treated as a string to preserve formatting.
-            yq -i ".${{ inputs.service-name }}.image.tag = \"${{ inputs.image-tag }}\"" "$FILE"
+            yq -i ".${SERVICE_KEY}.image.tag = \"${{ inputs.image-tag }}\"" "$FILE"
             echo "Updated tag successfully"
             # Show the updated value
-            yq ".${{ inputs.service-name }}.image" "$FILE"
+            yq ".${SERVICE_KEY}.image" "$FILE"
           else
             echo "::error::File not found: $FILE (Is your service-name correct?)"
             exit 1
