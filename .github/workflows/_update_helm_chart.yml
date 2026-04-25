@@ -73,6 +73,9 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
+          # Configure git to use PAT for authentication
+          git remote set-url origin https://${{ secrets.HELM_REPO_PAT }}@github.com/${{ inputs.helm-repo }}.git
+          
           # Stage the specific values file
           git add ${{ inputs.values-path }}/${{ inputs.service-name }}/values.yaml
           
