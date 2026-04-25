@@ -52,6 +52,7 @@ jobs:
           args: --severity-threshold=${{ inputs.severity_threshold }} --sarif-file-output=snyk.sarif
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
+          JAVA_HOME: ${{ env.JAVA_HOME }}
 
       # ── Node Runtime ─────────────────────────────
       - name: Setup Node.js
