@@ -48,27 +48,35 @@ jobs:
 
       - name: Update image tag
         run: |
-          FILE="helm-charts/${{ inputs.values-path }}/${{ inputs.service-name }}/values.yaml"
+          if [ "${{ inputs.environment }}" == "dev" ]; then
+            FILE="helm-charts/values-dev.yaml"
+          else
+            FILE="helm-charts/values-prod.yaml"
+          fi
+          
           if [ -f "$FILE" ]; then
             echo "Updating $FILE with tag ${{ inputs.image-tag }}"
             
-            # Convert kebab-case to camelCase for YAML key (e.g., book-service → bookService)
+            # Convert kebab-case to camelCase (e.g., book-service → bookService)
             SERVICE_KEY=$(echo "${{ inputs.service-name }}" | sed 's/-\([a-z]\)/\U\1/g')
             
-            # Update the tag value. Ensure it's treated as a string to preserve formatting.
+            # Update the tag in the parent values file
             yq -i ".${SERVICE_KEY}.image.tag = \"${{ inputs.image-tag }}\"" "$FILE"
             echo "Updated tag successfully"
-            # Show the updated value
             yq ".${SERVICE_KEY}.image" "$FILE"
           else
-            echo "::error::File not found: $FILE (Is your service-name correct?)"
+            echo "::error::File not found: $FILE"
             exit 1
           fi
 
       - name: Validate values.yaml
         run: |
           # Ensure the YAML is still valid after modification
-          yq eval '.' "helm-charts/${{ inputs.values-path }}/${{ inputs.service-name }}/values.yaml" > /dev/null
+          if [ "${{ inputs.environment }}" == "dev" ]; then
+            yq eval '.' "helm-charts/values-dev.yaml" > /dev/null
+          else
+            yq eval '.' "helm-charts/values-prod.yaml" > /dev/null
+          fi
           echo "YAML validation passed"
 
       - name: Commit and Push changes
@@ -77,14 +85,16 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           
-          # Configure git to use PAT for authentication
           git remote set-url origin https://${{ secrets.HELM_REPO_PAT }}@github.com/${{ inputs.helm-repo }}.git
           
-          # Stage the specific values file
-          git add ${{ inputs.values-path }}/${{ inputs.service-name }}/values.yaml
+          if [ "${{ inputs.environment }}" == "dev" ]; then
+            git add values-dev.yaml
+          else
+            git add values-prod.yaml
+          fi
           
           if git diff --staged --quiet; then
-            echo "No changes detected in values.yaml (tag might already be up to date)"
+            echo "No changes detected (tag might already be up to date)"
           else
             git commit -m "cd: update ${{ inputs.service-name }} image tag to ${{ inputs.image-tag }} [${{ inputs.environment }}]"
             git push origin ${{ inputs.environment }}
