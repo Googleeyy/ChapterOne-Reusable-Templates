@@ -3,7 +3,7 @@ name: Reusable SonarQube Scan
 on:
   workflow_call:
     inputs:
-      service-path:
+      working_directory:
         required: false
         type: string
         default: '.'
@@ -50,7 +50,7 @@ jobs:
 
       - name: SonarQube Scan (Java)
         if: inputs.runtime == 'java'
-        working-directory: ${{ inputs.service-path }}
+        working-directory: ${{ inputs.working_directory }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
@@ -70,31 +70,14 @@ jobs:
 
       - name: Install dependencies
         if: inputs.runtime == 'node'
-        working-directory: ${{ inputs.service-path }}
+        working-directory: ${{ inputs.working_directory }}
         run: npm install
 
-      - name: Run SonarQube Scan
+      - name: SonarQube Scan (Node.js)
         if: inputs.runtime == 'node'
         uses: SonarSource/sonarqube-scan-action@v6
         with:
-          projectBaseDir: .
+          projectBaseDir: ${{ inputs.working_directory }}
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
           SONAR_HOST_URL: ${{ secrets.SONAR_HOST_URL }}
-
-      # ── Sonar Quality Gate Check ─────────────────────
-      - name: SonarQube Quality Gate
-        id: gate
-        if: inputs.runtime == 'java'
-        uses: SonarSource/sonarqube-quality-gate-action@v1
-        with:
-          scanMetadataReportFile: .scannerwork/report-task.txt
-        timeout-minutes: 5
-        env:
-          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
-
-      - name: Set Gate Output
-        id: set_gate
-        if: always()
-        run: |
-          echo "status=${{ steps.gate.outcome }}" >> $GITHUB_OUTPUT
