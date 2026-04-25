@@ -44,15 +44,16 @@ jobs:
           distribution: 'temurin'
           cache: 'maven'
 
+      - name: Install Snyk CLI
+        if: inputs.runtime == 'java'
+        run: npm install -g snyk
+
       - name: Snyk Scan (Maven)
         if: inputs.runtime == 'java'
-        uses: snyk/actions/maven@0.4.0
-        with:
-          command: test
-          args: --severity-threshold=${{ inputs.severity_threshold }} --sarif-file-output=snyk.sarif
+        working-directory: ${{ inputs.working_directory }}
         env:
           SNYK_TOKEN: ${{ secrets.SNYK_TOKEN }}
-          JAVA_HOME: ${{ env.JAVA_HOME }}
+        run: snyk test --severity-threshold=${{ inputs.severity_threshold }} --sarif-file-output=snyk.sarif
 
       # ── Node Runtime ─────────────────────────────
       - name: Setup Node.js
