@@ -23,7 +23,7 @@ on:
       values-path:
         required: false
         type: string
-        default: "helm/microservices"
+        default: "microservices"
         description: "Path to microservices values files in Helm repo"
     secrets:
       HELM_REPO_PAT:
