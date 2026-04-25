@@ -1,0 +1,97 @@
+name: Reusable Update Helm Chart
+
+on:
+  workflow_call:
+    inputs:
+      service-name:
+        required: true
+        type: string
+        description: "Name of the microservice (e.g., book-service, user-service, frontend)"
+      image-tag:
+        required: true
+        type: string
+        description: "Docker image tag to deploy (e.g., v1.0.5)"
+      environment:
+        required: true
+        type: string
+        description: "Environment branch (dev or production)"
+      helm-repo:
+        required: false
+        type: string
+        default: "Googleeyy/ChapterOne-Helm"
+        description: "Helm chart repository"
+      values-path:
+        required: false
+        type: string
+        default: "helm/microservices"
+        description: "Path to microservices values files in Helm repo"
+    secrets:
+      HELM_REPO_PAT:
+        required: true
+        description: "Personal Access Token with write access to Helm repository"
+
+jobs:
+  update-chart:
+    name: "CD: Update ${{ inputs.service-name }} Helm Chart"
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout Helm Repository
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ inputs.helm-repo }}
+          token: ${{ secrets.HELM_REPO_PAT }}
+          path: helm-charts
+          ref: ${{ inputs.environment }}
+
+      - name: Setup yq
+        uses: mikefarah/yq@v4.44.1
+
+      - name: Update image tag
+        run: |
+          FILE="helm-charts/${{ inputs.values-path }}/${{ inputs.service-name }}/values.yaml"
+          if [ -f "$FILE" ]; then
+            echo "Updating $FILE with tag ${{ inputs.image-tag }}"
+            # Update the tag value. Ensure it's treated as a string to preserve formatting.
+            yq -i ".${{ inputs.service-name }}.image.tag = \"${{ inputs.image-tag }}\"" "$FILE"
+            echo "Updated tag successfully"
+            # Show the updated value
+            yq ".${{ inputs.service-name }}.image" "$FILE"
+          else
+            echo "::error::File not found: $FILE (Is your service-name correct?)"
+            exit 1
+          fi
+
+      - name: Validate values.yaml
+        run: |
+          # Ensure the YAML is still valid after modification
+          yq eval '.' "helm-charts/${{ inputs.values-path }}/${{ inputs.service-name }}/values.yaml" > /dev/null
+          echo "YAML validation passed"
+
+      - name: Commit and Push changes
+        run: |
+          cd helm-charts
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          
+          # Stage the specific values file
+          git add ${{ inputs.values-path }}/${{ inputs.service-name }}/values.yaml
+          
+          if git diff --staged --quiet; then
+            echo "No changes detected in values.yaml (tag might already be up to date)"
+          else
+            git commit -m "cd: update ${{ inputs.service-name }} image tag to ${{ inputs.image-tag }} [${{ inputs.environment }}]"
+            git push origin ${{ inputs.environment }}
+            echo "Successfully pushed changes to ${{ inputs.environment }} branch"
+          fi
+
+      - name: Job Summary
+        if: always()
+        run: |
+          echo "## 📦 Helm Chart Update Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | ${{ inputs.service-name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Tag** | ${{ inputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Helm Repository** | ${{ inputs.helm-repo }} |" >> $GITHUB_STEP_SUMMARY

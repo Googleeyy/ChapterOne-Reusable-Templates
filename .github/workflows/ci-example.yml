@@ -1,0 +1,75 @@
+name: Example CI/CD Pipeline with Helm Update
+
+on:
+  push:
+    branches:
+      - dev
+      - production
+  workflow_dispatch:
+    inputs:
+      image-tag:
+        required: true
+        type: string
+        description: "Docker image tag to deploy"
+
+env:
+  DOCKER_USERNAME: googleyy
+
+jobs:
+  # ── Build & Scan Job ─────────────────────────────
+  build:
+    name: Build & Scan
+    uses: ./.github/workflows/_build_trivy.yml
+    with:
+      image_name: book-service
+      tag: ${{ github.sha }}
+      is_production: ${{ github.ref == 'refs/heads/production' && 'true' || 'false' }}
+      working_directory: '.'
+      docker_context: '.'
+      dockerfile_path: 'Dockerfile'
+      runtime: 'java'
+      java_version: '21'
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+
+  # ── Push to Registry Job ──────────────────────────
+  push:
+    name: Push Image
+    needs: build
+    uses: ./.github/workflows/_push.yml
+    with:
+      image_name: book-service
+      tag: ${{ github.sha }}
+      is_production: ${{ github.ref == 'refs/heads/production' && 'true' || 'false' }}
+      push_dev_images: 'true'
+    secrets:
+      DOCKER_USERNAME: ${{ secrets.DOCKER_USERNAME }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  # ── Update Helm Chart Job ─────────────────────────
+  update-helm:
+    name: Update Helm Chart
+    needs: push
+    uses: ./.github/workflows/_update_helm_chart.yml
+    with:
+      service-name: book-service
+      image-tag: ${{ github.sha }}
+      environment: ${{ github.ref == 'refs/heads/production' && 'production' || 'dev' }}
+      helm-repo: Googleeyy/ChapterOne-Helm
+      values-path: helm/microservices
+    secrets:
+      HELM_REPO_PAT: ${{ secrets.HELM_REPO_PAT }}
+
+  # ── Notify Job ─────────────────────────────────────
+  notify:
+    name: Notify Deployment
+    needs: [build, push, update-helm]
+    if: always()
+    uses: ./.github/workflows/_notify.yml
+    with:
+      status: ${{ needs.push.result == 'success' && needs.update-helm.result == 'success' && 'success' || 'failure' }}
+      environment: ${{ github.ref == 'refs/heads/production' && 'production' || 'dev' }}
+    secrets:
+      SLACK_WEBHOOK_URL: ${{ secrets.SLACK_WEBHOOK_URL }}
