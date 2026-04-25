@@ -58,7 +58,6 @@ jobs:
       image-tag: ${{ github.sha }}
       environment: ${{ github.ref == 'refs/heads/production' && 'production' || 'dev' }}
       helm-repo: Googleeyy/ChapterOne-Helm
-      values-path: microservices
     secrets:
       HELM_REPO_PAT: ${{ secrets.HELM_REPO_PAT }}
 
