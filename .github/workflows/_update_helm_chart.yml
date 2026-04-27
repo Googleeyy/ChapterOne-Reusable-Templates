@@ -25,15 +25,44 @@ on:
         type: string
         default: "microservices"
         description: "Path to microservices values files in Helm repo"
+      require-approval:
+        required: false
+        type: boolean
+        default: false
+        description: "Set to true to require manual approval before updating Helm chart (use for production deployments)"
     secrets:
       HELM_REPO_PAT:
         required: true
         description: "Personal Access Token with write access to Helm repository"
 
 jobs:
+  approve:
+    name: "Approval Gate: ${{ inputs.environment }} Deployment"
+    runs-on: ubuntu-latest
+    if: inputs.require-approval == true
+    environment: ${{ inputs.environment }}
+    outputs:
+      approved-by: ${{ github.actor }}
+    steps:
+      - name: Await Approval
+        run: |
+          echo "✅ ${{ inputs.environment }} deployment approved by reviewer."
+          echo ""
+          echo "## 🔒 Production Approval Gate" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| **Service** | ${{ inputs.service-name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Image Tag** | ${{ inputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Environment** | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Approved By** | @${{ github.actor }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Approved At** | $(date -u) |" >> $GITHUB_STEP_SUMMARY
+
   update-chart:
     name: "CD: Update ${{ inputs.service-name }} Helm Chart"
     runs-on: ubuntu-latest
+    needs: approve
+    if: always() && (needs.approve.result == 'success' || needs.approve.result == 'skipped')
     steps:
       - name: Checkout Helm Repository
         uses: actions/checkout@v4
@@ -96,7 +125,11 @@ jobs:
           if git diff --staged --quiet; then
             echo "No changes detected (tag might already be up to date)"
           else
-            git commit -m "cd: update ${{ inputs.service-name }} image tag to ${{ inputs.image-tag }} [${{ inputs.environment }}]"
+            if [ "${{ needs.approve.result }}" == "success" ]; then
+              git commit -m "cd: update ${{ inputs.service-name }} image tag to ${{ inputs.image-tag }} [${{ inputs.environment }}] (approved by @${{ needs.approve.outputs.approved-by }})"
+            else
+              git commit -m "cd: update ${{ inputs.service-name }} image tag to ${{ inputs.image-tag }} [${{ inputs.environment }}]"
+            fi
             git push origin ${{ inputs.environment }}
             echo "Successfully pushed changes to ${{ inputs.environment }} branch"
           fi
@@ -112,3 +145,7 @@ jobs:
           echo "| **Image Tag** | ${{ inputs.image-tag }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Environment** | ${{ inputs.environment }} |" >> $GITHUB_STEP_SUMMARY
           echo "| **Helm Repository** | ${{ inputs.helm-repo }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| **Approval Required** | ${{ inputs.require-approval }} |" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ needs.approve.result }}" == "success" ]; then
+            echo "| **Approved By** | @${{ needs.approve.outputs.approved-by }} |" >> $GITHUB_STEP_SUMMARY
+          fi
