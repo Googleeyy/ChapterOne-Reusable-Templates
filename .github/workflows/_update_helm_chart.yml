@@ -37,7 +37,7 @@ on:
 
 jobs:
   approve:
-    name: "Approval Gate: ${{ inputs.environment }} Deployment"
+    name: "Approval Gate"
     runs-on: ubuntu-latest
     if: inputs.require-approval == true
     environment: ${{ inputs.environment }}
